@@ -1,0 +1,13 @@
+# Ignore python binaries and cache folders
+__pycache__/
+.venv/
+venv/
+
+# Ignore your heavy machine learning model weights
+*.pt
+*.keras
+*.h5
+*.pkl
+
+# Ignore heavy dataset files
+*.csv
