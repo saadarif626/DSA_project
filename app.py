@@ -11,16 +11,29 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="Weather Forecasting",
                    page_icon="🌤️", layout="wide")
 
+# ══════════════════════════════════════════════════════════════════════════
+# MODEL DEFINITIONS & LOADERS
+# ══════════════════════════════════════════════════════════════════════════
+
 @st.cache_resource
 def load_all_models():
     with open("model_lr.pkl",   "rb") as f: lr  = pickle.load(f)
     with open("vectorizer.pkl", "rb") as f: vec = pickle.load(f)
     with open("scaler.pkl",     "rb") as f: sc  = pickle.load(f)
-    # Updated to handle native Keras structure if saved as .keras later
+    
+    # FIXED: Comprehensive structural loading fallback strategy
     try:
+        # Try loading native modern format if available
         lstm = tf.keras.models.load_model("model_lstm.keras")
-    except:
-        lstm = tf.keras.models.load_model("model_lstm.h5")
+    except Exception:
+        try:
+            # Try loading h5 with compilation metrics ignored to bypass layer config differences
+            lstm = tf.keras.models.load_model("model_lstm.h5", compile=False)
+        except Exception as e:
+            # If both fail, create a placeholder structure so your LR and BERT models still run smoothly!
+            st.warning(f"⚠️ BiLSTM could not deserialize due to version gap ({e}). Running app in Baseline + BERT mode.")
+            lstm = None
+            
     return lr, vec, sc, lstm
 
 class BertForTimeSeries(nn.Module):
@@ -48,13 +61,17 @@ class BertForTimeSeries(nn.Module):
 @st.cache_resource
 def load_bert():
     m = BertForTimeSeries(input_features=15) # FIXED: Force 15 structural features
-    m.load_state_dict(torch.load("model_bert.pt",
-                                  map_location=torch.device("cpu")))
+    m.load_state_dict(torch.load("model_bert.pt", map_location=torch.device("cpu")))
     m.eval()
     return m
 
+# Load assets on startup
 lr_model, vectorizer, scaler, lstm_model = load_all_models()
 bert_model = load_bert()
+
+# ══════════════════════════════════════════════════════════════════════════
+# DATA PROCESSING HELPERS
+# ══════════════════════════════════════════════════════════════════════════
 
 def discretize(row):
     labels = []
@@ -74,23 +91,6 @@ base_feature_cols = [
     "City_Encoded","State_Encoded"
 ]
 
-def predict(model_choice, X_scaled):
-    if "LR" in model_choice:
-        text  = [discretize(r) for r in X_scaled]
-        tfidf = vectorizer.transform(text)
-        return lr_model.predict(tfidf), lr_model.predict_proba(tfidf)[:,1]
-    elif "BiLSTM" in model_choice:
-        X3d  = X_scaled.reshape(X_scaled.shape[0], 1, X_scaled.shape[1])
-        prob = lstm_model.predict(X3d).flatten()
-        return (prob > 0.5).astype(int), prob
-    else:
-        xt = torch.FloatTensor(X_scaled)
-        with torch.no_grad():
-            out   = bert_model(xt)
-            probs = torch.softmax(out, dim=1)[:,1].numpy()
-            preds = out.argmax(dim=1).numpy()
-        return preds, probs
-
 # HELPER FUNCTION: Fills in mock lag/rolling data for rows missing the trailing 6 features
 def pad_features(base_features_matrix):
     count = base_features_matrix.shape[0]
@@ -100,6 +100,32 @@ def pad_features(base_features_matrix):
     roll_std_placeholder = np.zeros((count, 1))                           # Temp_RollStd4
     
     return np.hstack([base_features_matrix, lags_placeholder, roll_mean_placeholder, roll_std_placeholder])
+
+def predict(model_choice, X_scaled):
+    if "LR" in model_choice:
+        text  = [discretize(r) for r in X_scaled]
+        tfidf = vectorizer.transform(text)
+        return lr_model.predict(tfidf), lr_model.predict_proba(tfidf)[:,1]
+        
+    elif "BiLSTM" in model_choice:
+        if lstm_model is None:
+            st.error("The BiLSTM model is unavailable due to an environment version conflict. Please select another model.")
+            return np.zeros(X_scaled.shape[0]), np.zeros(X_scaled.shape[0])
+        X3d  = X_scaled.reshape(X_scaled.shape[0], 1, X_scaled.shape[1])
+        prob = lstm_model.predict(X3d).flatten()
+        return (prob > 0.5).astype(int), prob
+        
+    else:
+        xt = torch.FloatTensor(X_scaled)
+        with torch.no_grad():
+            out   = bert_model(xt)
+            probs = torch.softmax(out, dim=1)[:,1].numpy()
+            preds = out.argmax(dim=1).numpy()
+        return preds, probs
+
+# ══════════════════════════════════════════════════════════════════════════
+# STREAMLIT USER INTERFACE LAYOUT
+# ══════════════════════════════════════════════════════════════════════════
 
 st.title("🌤️ Weather Temperature Trend Forecasting")
 st.markdown("Predict whether temperature will go **UP ⬆️** or **DOWN ⬇️**")
@@ -174,7 +200,7 @@ with tab2:
                          wind_dir,wind_speed,month,
                          week,city,state]])
         
-        # FIXED: Append structural lag dimensions to prevent Scaler dimension mismatch crashes
+        # Append structural lag dimensions to prevent Scaler dimension mismatch crashes
         full_row = pad_features(row)
         X = scaler.transform(full_row)
         p, prob = predict(model_choice, X)
