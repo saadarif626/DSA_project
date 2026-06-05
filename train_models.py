@@ -153,7 +153,7 @@ lstm_history = model_lstm.fit(
 )
 
 # FIXED: Saved model as native .keras file format instead of legacy .h5 format
-model_lstm.save('model_lstm.keras')
+model_lstm.save('model_lstm.h5')
 print("BiLSTM model saved!")
 
 # Plot BiLSTM curves
